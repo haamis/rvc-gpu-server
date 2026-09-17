@@ -40,8 +40,6 @@ DEFAULT_ENTRY = {
     "index_rate": 0.75,
     "f0_method": "pm",
     "speaker_id": 0,
-    "speed_cloud": 1.0,
-    "speed_local": 0.7,
 }
 
 
@@ -244,16 +242,18 @@ def default_voice_name(title: str, zip_url: str) -> str:
 
 
 def format_voice_entry(name: str, pth: Path, index: Path | None, provenance: str) -> str:
+    rvc_lines = [f"    rvc: {{model: {pth},"]
+    if index is not None:
+        rvc_lines.append(f"          index: {index},")
+    for key, value in DEFAULT_ENTRY.items():
+        rvc_lines.append(f"          {key}: {value},")
+    rvc_lines[-1] = rvc_lines[-1].rstrip(",") + "}"
     lines = [
         f"  {name}:",
-        f"    tts: en_US-lessac-medium",
-        f"    rvc_model: {pth}",
+        f"    piper: {{voice: en_US-lessac-medium, speed: 0.7}}",
+        *rvc_lines,
+        f"    # Added by tools/rvc_models.py — {provenance}",
     ]
-    if index is not None:
-        lines.append(f"    rvc_index: {index}")
-    for key, value in DEFAULT_ENTRY.items():
-        lines.append(f"    {key}: {value}")
-    lines.append(f"    # Added by tools/rvc_models.py — {provenance}")
     return "\n".join(lines) + "\n"
 
 
