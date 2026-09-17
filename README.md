@@ -13,6 +13,9 @@ device, loaded model). Self-contained — zero imports from the TTS-bot repo.
 | `worker.py` | **verbatim copy** of TTS-bot's `ttsbot/rvc/worker.py` — do not edit, re-copy on change |
 | `rvc_infer/` | upstream RVC (pinned commit; rsynced working tree, no git) |
 | `rvc_models/` | voice `.pth`/`.index` files (rsynced from thin client) |
+| `ttsbot/media/diarize.py`, `ttsbot/media/audio.py` | **byte-identical
+  mirrors** of the thin client's analysis code (`analyze_media` etc.) —
+  re-copy on change, never edit (same rule as `worker.py`) |
 | `tools/rvc_models.py` | voice-models.com downloader (prints thin-config block) |
 | `tests/` | `test_owner.py` (stdlib-only) + `test_server.py` (needs server venv) |
 
@@ -39,6 +42,11 @@ RVC_GPU_SERVER_PORT=8001 \
 python server.py
 curl localhost:8001/health  # want "device": "cuda"
 ```
+
+`POST /diarize` (multipart audio + `engine`/`num_voices`/`threshold`) returns
+speaker analysis `{segments, cluster_f0, detected, engine}` for multi-voice
+`!rvc`; voice assignment stays thin-side. Only the local wav2vec2+RMVPE
+engine runs here (`RVC_DEVICE` selects cuda); anything else is 501.
 
 Env: `RVC_GPU_SERVER_HOST` (default 0.0.0.0), `RVC_GPU_SERVER_PORT`
 (default 8001), `RVC_GPU_SERVER_TOKEN` (Bearer auth, empty = LAN trust),

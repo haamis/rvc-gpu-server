@@ -42,6 +42,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from worker_owner import RVCRequestError, RvcWorkerOwner
+from ttsbot.media.diarize import analyze_media
 
 log = logging.getLogger("rvc_server")
 
@@ -53,6 +54,8 @@ PROTOCOL_VERSION = "1"
 PROTOCOL_HEADER = "X-RVC-Protocol"
 
 JOB_TIMEOUT = float(os.getenv("RVC_GPU_SERVER_JOB_TIMEOUT", "1800"))
+# Evaluated where the models run (desktop side): "auto" = cuda if available.
+RVC_DEVICE = os.getenv("RVC_DEVICE", "auto")
 # Long inputs OOM the 8GB card in a single pass (activations scale with
 # length), so inputs over CHUNK_SEC are converted in overlapping windows and
 # crossfade-stitched. Read dynamically (tests monkeypatch the globals).
@@ -326,6 +329,64 @@ def create_app(
         finally:
             if not keep_files:
                 shutil.rmtree(scratch, ignore_errors=True)
+
+    @app.post("/diarize")
+    async def diarize(
+        audio: UploadFile = File(...),
+        engine: str = Form("local"),
+        num_voices: int = Form(2),
+        threshold: float = Form(0.35),
+        authorization: str | None = Header(None),
+        protocol: str | None = Header(None, alias=PROTOCOL_HEADER),
+    ) -> JSONResponse:
+        """Speaker analysis for multi-voice !rvc: segments + per-cluster f0.
+
+        Voice assignment (rank matching against the thin client's pitch
+        profiles) and gap absorption stay thin-side — see finalize_result.
+        Only the local wav2vec2+RMVPE engine runs here for now; anything
+        else is 501 (transient: the client falls back to its local engines).
+        Data errors (no speech) are 400 (deterministic: no local retry).
+        """
+        check_protocol(protocol)
+        check_auth(authorization, app.state.require_token)
+        if engine != "local":
+            raise HTTPException(
+                status_code=501, detail=f"diarize engine {engine!r} not available on this server"
+            )
+
+        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
+        scratch.mkdir(parents=True, exist_ok=True)
+        src = scratch / f"input{Path(audio.filename or 'in.wav').suffix or '.wav'}"
+        try:
+            src.write_bytes(await audio.read())
+            try:
+                analysis = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        analyze_media,
+                        str(src), int(num_voices), float(threshold),
+                        RVC_DEVICE,
+                    ),
+                    timeout=JOB_TIMEOUT,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except asyncio.TimeoutError as e:
+                raise HTTPException(status_code=504, detail=f"diarization timed out: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"diarization failed: {e}")
+            return JSONResponse(
+                content={
+                    "segments": [
+                        {"start": s.start, "end": s.end, "cluster": s.cluster}
+                        for s in analysis.segments
+                    ],
+                    "cluster_f0": {str(c): f for c, f in analysis.cluster_f0.items()},
+                    "detected": analysis.detected,
+                    "engine": "local",
+                }
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     return app
 
