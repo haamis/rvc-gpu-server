@@ -30,11 +30,14 @@ RVC_WORKER_ROOT, RVC_WORKER_MAX_RSS_MB, RVC_MODEL_ROOT, RVC_GPU_SERVER_JOB_TIMEO
 import asyncio
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
@@ -50,6 +53,11 @@ PROTOCOL_VERSION = "1"
 PROTOCOL_HEADER = "X-RVC-Protocol"
 
 JOB_TIMEOUT = float(os.getenv("RVC_GPU_SERVER_JOB_TIMEOUT", "1800"))
+# Long inputs OOM the 8GB card in a single pass (activations scale with
+# length), so inputs over CHUNK_SEC are converted in overlapping windows and
+# crossfade-stitched. Read dynamically (tests monkeypatch the globals).
+CHUNK_SEC = float(os.getenv("RVC_SERVER_CHUNK_SEC", "30"))
+CHUNK_OVERLAP_SEC = float(os.getenv("RVC_SERVER_CHUNK_OVERLAP_SEC", "2"))
 
 
 def check_auth(authorization: str | None, require_token: str) -> None:
@@ -107,6 +115,70 @@ def resolve_model_path(
                     detail=f"ambiguous model name {verbatim.name!r} on server: {hits}",
                 )
     raise HTTPException(status_code=400, detail=f"model file not found on server: {requested!r}")
+
+
+def _plan_chunks(total: int, chunk: int, overlap: int) -> list[tuple[int, int]]:
+    """Overlapping [start, end) sample windows covering [0, total).
+
+    Step is chunk-overlap; the last window is clamped to total (so it may be
+    shorter). A single window covers short inputs (no stitching).
+    """
+    if total <= chunk or chunk <= 0:
+        return [(0, total)]
+    step = max(1, chunk - overlap)
+    windows = [(s, min(s + chunk, total)) for s in range(0, total, step)]
+    if windows[-1][1] - windows[-1][0] <= overlap and len(windows) > 1:
+        # Degenerate tail (all overlap, no new audio): extend the previous
+        # window to EOF instead.
+        windows[-2] = (windows[-2][0], total)
+        windows.pop()
+    return windows
+
+
+def _stitch(chunks: list[np.ndarray], overlap: int) -> np.ndarray:
+    """Concatenate chunk outputs with a linear crossfade over `overlap` samples.
+
+    Defensive about RVC output lengths (duration preservation is approximate):
+    shortfalls are zero-padded, overruns trimmed.
+    """
+    if len(chunks) == 1:
+        return chunks[0]
+    out = chunks[0].copy()
+    for nxt in chunks[1:]:
+        o = min(overlap, len(out), len(nxt))
+        if o > 0:
+            ramp = np.linspace(0.0, 1.0, o)
+            tail = out[-o:] * (1.0 - ramp) + nxt[:o] * ramp
+            out = np.concatenate([out[:-o], tail, nxt[o:]])
+        else:
+            out = np.concatenate([out, nxt])
+    return out
+
+
+async def _convert_chunked(owner, src: Path, dst: Path, scratch: Path, **params) -> None:
+    """Convert, splitting inputs over CHUNK_SEC into overlap-stitched windows."""
+    audio, sr = sf.read(str(src), dtype="float32", always_2d=True)
+    total = len(audio)
+    chunk = int(CHUNK_SEC * sr)
+    overlap = int(CHUNK_OVERLAP_SEC * sr)
+    windows = _plan_chunks(total, chunk, overlap)
+    if len(windows) == 1:
+        await owner.convert(input_path=src, output_path=dst, **params)
+        return
+    log.info("chunked convert: %.1fs -> %d windows", total / sr, len(windows))
+    outs: list[np.ndarray] = []
+    out_sr = sr
+    for i, (s, e) in enumerate(windows):
+        c_in = scratch / f"chunk_{i:03d}_in.wav"
+        c_out = scratch / f"chunk_{i:03d}_out.wav"
+        sf.write(str(c_in), audio[s:e], sr)
+        await owner.convert(input_path=c_in, output_path=c_out, **params)
+        data, out_sr = sf.read(str(c_out), dtype="float32", always_2d=True)
+        outs.append(data)
+    o = int(CHUNK_OVERLAP_SEC * out_sr)
+    stitched = _stitch(outs, o)
+    # Mono-ize only if every chunk came back mono; otherwise keep channels.
+    sf.write(str(dst), stitched, out_sr)
 
 
 def create_app(
@@ -214,9 +286,11 @@ def create_app(
             src.write_bytes(await audio.read())
             try:
                 await asyncio.wait_for(
-                    app.state.owner.convert(
-                        input_path=src,
-                        output_path=dst,
+                    _convert_chunked(
+                        app.state.owner,
+                        src,
+                        dst,
+                        scratch,
                         model_path=str(model_path),
                         index_path=str(index_path) if index_path else None,
                         pitch=int(pitch),
@@ -249,15 +323,7 @@ def create_app(
             return Response(content=dst.read_bytes(), media_type="audio/wav")
         finally:
             if not keep_files:
-                for p in (src, dst):
-                    try:
-                        p.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                try:
-                    scratch.rmdir()
-                except Exception:
-                    pass
+                shutil.rmtree(scratch, ignore_errors=True)
 
     return app
 

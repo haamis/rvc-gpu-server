@@ -44,7 +44,10 @@ Env: `RVC_GPU_SERVER_HOST` (default 0.0.0.0), `RVC_GPU_SERVER_PORT`
 (default 8001), `RVC_GPU_SERVER_TOKEN` (Bearer auth, empty = LAN trust),
 `RVC_MODEL_ROOT` (flat voice-model dir fallback), `RVC_WORKER_ROOT`
 (default `<repo>/rvc_infer`), `RVC_WORKER_THREADS`, `RVC_WORKER_MAX_RSS_MB`
-(default 2500), `RVC_GPU_SERVER_JOB_TIMEOUT` (default 1800).
+(default 2500), `RVC_GPU_SERVER_JOB_TIMEOUT` (default 1800),
+`RVC_SERVER_CHUNK_SEC` (default 30 — inputs longer than this are converted
+in overlapping windows and crossfade-stitched, bounding VRAM on long
+media), `RVC_SERVER_CHUNK_OVERLAP_SEC` (default 2).
 
 ## Persistence
 
