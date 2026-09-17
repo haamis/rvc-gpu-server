@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# Heavy data: rsynced from the thin client, not versioned.
+rvc_models/
+rvc_infer/
+# Local scratch / secrets.
+*.log
+.env

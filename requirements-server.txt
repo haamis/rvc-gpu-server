@@ -1,0 +1,14 @@
+# GPU worker server deps (desktop/ifrit). Install AFTER the RVC stack:
+#   pip install -r requirements-server.txt
+#
+# Tested set: fastapi 0.109.2 (0.104 needs anyio<4; >=0.110 drags newer
+# starlette — don't unpin casually).
+fastapi==0.109.2
+uvicorn>=0.22.0
+python-multipart>=0.0.18
+# Tests only:
+httpx>=0.27
+pytest>=7.4.0
+pytest-asyncio>=0.23
+numpy>=1.24.0
+soundfile>=0.12.1
