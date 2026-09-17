@@ -610,7 +610,11 @@ def embed_windows_wav2vec2(windows: list[np.ndarray], device: str = "cpu") -> np
     for i, w in enumerate(windows):
         n = min(w.size, target)
         padded[i, :n] = w[:n]
-    lengths = torch.tensor([min(w.size, target) for w in windows], dtype=torch.long)
+    # lengths must live on the model's device: extract_features builds the
+    # attention bias from them (CPU lengths + CUDA model = device mismatch).
+    lengths = torch.tensor(
+        [min(w.size, target) for w in windows], dtype=torch.long, device=device
+    )
 
     with _MODEL_LOCK:
         bundle = torchaudio.pipelines.WAV2VEC2_BASE
