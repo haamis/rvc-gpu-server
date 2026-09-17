@@ -14,4 +14,5 @@ fi
 export RVC_MODEL_ROOT="${RVC_MODEL_ROOT:-$REPO/rvc_models}"
 export RVC_GPU_SERVER_PORT="${RVC_GPU_SERVER_PORT:-8001}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export RVC_CUDA_GRAPH="${RVC_CUDA_GRAPH:-0}"
 exec "$HOME/rvc-server-venv/bin/python" "$REPO/server.py" >>/tmp/rvc_server.log 2>&1

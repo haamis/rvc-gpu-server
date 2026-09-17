@@ -12,6 +12,9 @@ Environment=RVC_GPU_SERVER_PORT=8001
 # captures; expandable segments trade a little throughput for far fewer
 # spurious OOMs on an 8GB card.
 Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Eager inference (no CUDA-graph capture): trades some speed for flat VRAM
+# and arbitrarily long inputs. Remove to re-enable graphs.
+Environment=RVC_CUDA_GRAPH=0
 ExecStart=%h/rvc-server-venv/bin/python %h/rvc-gpu-server/server.py
 WorkingDirectory=%h/rvc-gpu-server
 Restart=on-failure
