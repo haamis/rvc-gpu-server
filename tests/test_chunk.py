@@ -41,9 +41,9 @@ def test_plan_covers_with_overlap():
 
 
 def test_plan_degenerate_tail_merged():
-    # total=310, chunk=300, overlap=50 -> tail would be 10 samples of pure
-    # overlap; merged into one (0, 310) window instead.
-    assert _plan_chunks(310, 300, 50) == [(0, 310)]
+    # chunk=300, overlap=200 (step 100), total=350: the last window would be
+    # 50 samples of pure overlap, so it merges into the previous window.
+    assert _plan_chunks(350, 300, 200) == [(0, 300), (100, 350), (200, 350)]
 
 
 def test_stitch_single_passthrough():

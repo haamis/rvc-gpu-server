@@ -147,7 +147,9 @@ def _stitch(chunks: list[np.ndarray], overlap: int) -> np.ndarray:
     for nxt in chunks[1:]:
         o = min(overlap, len(out), len(nxt))
         if o > 0:
-            ramp = np.linspace(0.0, 1.0, o)
+            # Column-shaped ramp: a flat (o,) would broadcast (o, C) audio
+            # into (o, o) — a real bug that shipped in the first version.
+            ramp = np.linspace(0.0, 1.0, o).reshape((o,) + (1,) * (out.ndim - 1))
             tail = out[-o:] * (1.0 - ramp) + nxt[:o] * ramp
             out = np.concatenate([out[:-o], tail, nxt[o:]])
         else:
