@@ -102,3 +102,40 @@ async def test_diarize_auth(tmp_path, monkeypatch):
     assert (await _post(client)).status_code == 401
     ok = await _post(client, extra_headers={"Authorization": "Bearer sekret"})
     assert ok.status_code == 200
+
+
+async def test_diarize_pyannote_branch(tmp_path, monkeypatch):
+    import ttsbot.media.diarize_pyannote as pmod
+
+    from ttsbot.media.diarize import DiarizationAnalysis, Segment
+
+    captured = {}
+
+    def fake_analyze(path, num_voices, threshold, token, device="cpu"):
+        captured.update(token=token, device=device, voices=num_voices)
+        return DiarizationAnalysis(
+            segments=[Segment(0.0, 1.0, 0)],
+            cluster_f0={0: 100.0},
+            detected=1,
+        )
+
+    monkeypatch.setattr(pmod, "analyze_media_pyannote", fake_analyze)
+    monkeypatch.setattr(server, "HF_TOKEN", "hf-test")
+    client = _client(tmp_path, monkeypatch)
+    r = await _post(client, extra_data={"engine": "pyannote"})
+    assert r.status_code == 200
+    assert r.json()["engine"] == "pyannote"
+    assert captured == {"token": "hf-test", "device": server.RVC_DEVICE, "voices": 2}
+
+
+async def test_diarize_pyannote_without_token_is_501(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "HF_TOKEN", "")
+    client = _client(tmp_path, monkeypatch)
+    r = await _post(client, extra_data={"engine": "pyannote"})
+    assert r.status_code == 501
+
+
+async def test_diarize_unknown_engine_is_400(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    r = await _post(client, extra_data={"engine": "whisperx"})
+    assert r.status_code == 400

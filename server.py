@@ -57,6 +57,9 @@ PROTOCOL_HEADER = "X-RVC-Protocol"
 JOB_TIMEOUT = float(os.getenv("RVC_GPU_SERVER_JOB_TIMEOUT", "1800"))
 # Evaluated where the models run (desktop side): "auto" = cuda if available.
 RVC_DEVICE = os.getenv("RVC_DEVICE", "auto")
+# Gated pyannote weights (accepted once per HF account; cached after first
+# download). Empty = pyannote engine unavailable (501, client falls back).
+HF_TOKEN = os.getenv("HF_TOKEN", "")
 # Long inputs OOM the 8GB card in a single pass (activations scale with
 # length), so inputs over CHUNK_SEC are converted in overlapping windows and
 # crossfade-stitched. Read dynamically (tests monkeypatch the globals).
@@ -342,18 +345,27 @@ def create_app(
     ) -> JSONResponse:
         """Speaker analysis for multi-voice !rvc: segments + per-cluster f0.
 
-        Voice assignment (rank matching against the thin client's pitch
-        profiles) and gap absorption stay thin-side — see finalize_result.
-        Only the local wav2vec2+RMVPE engine runs here for now; anything
-        else is 501 (transient: the client falls back to its local engines).
-        Data errors (no speech) are 400 (deterministic: no local retry).
+        Voice assignment (rank matching against the boksi pitch profiles)
+        and gap absorption stay boksi-side — see finalize_result. `engine`
+        selects the local wav2vec2+RMVPE stack or pyannote (needs HF_TOKEN
+        + installed weights, else 501). Data errors (no speech) are 400
+        (deterministic: no local retry).
         """
         check_protocol(protocol)
         check_auth(authorization, app.state.require_token)
-        if engine != "local":
-            raise HTTPException(
-                status_code=501, detail=f"diarize engine {engine!r} not available on this server"
-            )
+        if engine == "pyannote":
+            if not HF_TOKEN:
+                raise HTTPException(
+                    status_code=501, detail="pyannote engine needs HF_TOKEN on this server"
+                )
+            try:
+                from ttsbot.media.diarize_pyannote import analyze_media_pyannote
+            except Exception as e:
+                raise HTTPException(
+                    status_code=501, detail=f"pyannote engine not installed: {e}"
+                )
+        elif engine != "local":
+            raise HTTPException(status_code=400, detail=f"unknown diarize engine {engine!r}")
 
         scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
         scratch.mkdir(parents=True, exist_ok=True)
@@ -361,14 +373,24 @@ def create_app(
         try:
             src.write_bytes(await audio.read())
             try:
-                analysis = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        analyze_media,
-                        str(src), int(num_voices), float(threshold),
-                        RVC_DEVICE,
-                    ),
-                    timeout=JOB_TIMEOUT,
-                )
+                if engine == "pyannote":
+                    analysis = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            analyze_media_pyannote,
+                            str(src), int(num_voices), float(threshold),
+                            HF_TOKEN, RVC_DEVICE,
+                        ),
+                        timeout=JOB_TIMEOUT,
+                    )
+                else:
+                    analysis = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            analyze_media,
+                            str(src), int(num_voices), float(threshold),
+                            RVC_DEVICE,
+                        ),
+                        timeout=JOB_TIMEOUT,
+                    )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             except asyncio.TimeoutError as e:
@@ -383,7 +405,7 @@ def create_app(
                     ],
                     "cluster_f0": {str(c): f for c, f in analysis.cluster_f0.items()},
                     "detected": analysis.detected,
-                    "engine": "local",
+                    "engine": engine,
                 }
             )
         finally:

@@ -9,6 +9,10 @@ python-multipart>=0.0.18
 # Kokoro TTS (/tts endpoint). Needs onnxruntime-gpu (not plain onnxruntime)
 # for CUDA — install it explicitly; pip replaces the CPU wheel.
 kokoro-onnx==0.6.1
+# Diarization engines: local (wav2vec2/RMVPE via the RVC stack) needs
+# nothing extra; pyannote (4.x needs torch>=2.8 — pinned <4.0):
+#   pip install "pyannote.audio>=3.1.1,<4.0"
+# plus HF_TOKEN in the env file (gated repos) for the first weights download.
 # Runtime (chunked-convert wav IO):
 numpy>=1.24.0
 soundfile>=0.12.1
