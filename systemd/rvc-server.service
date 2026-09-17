@@ -1,0 +1,19 @@
+[Unit]
+Description=RVC GPU worker server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/rvc-server/env
+Environment=RVC_MODEL_ROOT=%h/rvc-gpu-server/rvc_models
+Environment=RVC_GPU_SERVER_PORT=8001
+ExecStart=%h/rvc-server-venv/bin/python %h/rvc-gpu-server/server.py
+WorkingDirectory=%h/rvc-gpu-server
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/tmp/rvc_server.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

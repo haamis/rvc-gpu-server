@@ -48,15 +48,23 @@ Env: `RVC_GPU_SERVER_HOST` (default 0.0.0.0), `RVC_GPU_SERVER_PORT`
 
 ## Persistence
 
-`start.sh` launches the server (log: `/tmp/rvc_server.log`). Secrets go in
-`~/.config/rvc-server/env` (chmod 600, never in git):
+`start.sh` launches the server by hand (log: `/tmp/rvc_server.log`). For
+boot persistence install the user unit (secrets in
+`~/.config/rvc-server/env`, chmod 600, never in git):
 
 ```bash
-mkdir -p ~/.config/rvc-server
+mkdir -p ~/.config/rvc-server ~/.config/systemd/user
 printf 'RVC_GPU_SERVER_TOKEN=<token>\n' > ~/.config/rvc-server/env
 chmod 600 ~/.config/rvc-server/env
-(crontab -l 2>/dev/null; echo "@reboot /home/haama/rvc-gpu-server/start.sh") | crontab -
+cp systemd/rvc-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now rvc-server
 ```
+
+NOTE: user units only start at boot if lingering is enabled, which needs
+root once: `sudo loginctl enable-linger haama`. Without it the service
+starts at first login instead. Check with
+`loginctl show-user haama -p Linger`.
 
 The thin client's `.env` needs the same `RVC_GPU_SERVER_TOKEN`.
 
