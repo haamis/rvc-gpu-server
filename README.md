@@ -46,6 +46,20 @@ Env: `RVC_GPU_SERVER_HOST` (default 0.0.0.0), `RVC_GPU_SERVER_PORT`
 (default `<repo>/rvc_infer`), `RVC_WORKER_THREADS`, `RVC_WORKER_MAX_RSS_MB`
 (default 2500), `RVC_GPU_SERVER_JOB_TIMEOUT` (default 1800).
 
+## Persistence
+
+`start.sh` launches the server (log: `/tmp/rvc_server.log`). Secrets go in
+`~/.config/rvc-server/env` (chmod 600, never in git):
+
+```bash
+mkdir -p ~/.config/rvc-server
+printf 'RVC_GPU_SERVER_TOKEN=<token>\n' > ~/.config/rvc-server/env
+chmod 600 ~/.config/rvc-server/env
+(crontab -l 2>/dev/null; echo "@reboot /home/haama/rvc-gpu-server/start.sh") | crontab -
+```
+
+The thin client's `.env` needs the same `RVC_GPU_SERVER_TOKEN`.
+
 ## Contract
 
 HTTP `X-RVC-Protocol: 1` — bump only in lockstep with the thin client's
