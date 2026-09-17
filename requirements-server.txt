@@ -6,6 +6,9 @@
 fastapi==0.109.2
 uvicorn>=0.22.0
 python-multipart>=0.0.18
+# Kokoro TTS (/tts endpoint). Needs onnxruntime-gpu (not plain onnxruntime)
+# for CUDA — install it explicitly; pip replaces the CPU wheel.
+kokoro-onnx==0.6.1
 # Runtime (chunked-convert wav IO):
 numpy>=1.24.0
 soundfile>=0.12.1

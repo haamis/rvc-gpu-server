@@ -43,6 +43,7 @@ from fastapi.responses import JSONResponse, Response
 
 from worker_owner import RVCRequestError, RvcWorkerOwner
 from ttsbot.media.diarize import analyze_media
+import kokoro_engine
 
 log = logging.getLogger("rvc_server")
 
@@ -385,6 +386,52 @@ def create_app(
                     "engine": "local",
                 }
             )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    @app.post("/tts")
+    async def tts(
+        text: str = Form(...),
+        voice: str = Form(...),
+        speed: float = Form(1.0),
+        authorization: str | None = Header(None),
+        protocol: str | None = Header(None, alias=PROTOCOL_HEADER),
+    ) -> Response:
+        """Kokoro TTS on the GPU: text + voice + speed -> wav.
+
+        The thin client's Kokoro-first tier when TTS_PROVIDER=auto: the
+        donor prosody for the RVC chain (identity comes from RVC). Speed is
+        engine-native. Deterministic errors (bad voice/text) are 400;
+        anything else is 503 (client falls through its local tiers).
+        """
+        check_protocol(protocol)
+        check_auth(authorization, app.state.require_token)
+
+        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
+        scratch.mkdir(parents=True, exist_ok=True)
+        dst = scratch / "tts.wav"
+        try:
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        kokoro_engine.synthesize,
+                        text, voice, float(speed), dst,
+                    ),
+                    timeout=JOB_TIMEOUT,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                # Unknown voice = client config error (fail fast); anything
+                # else (missing models, onnx failure) is server-side trouble.
+                if "Unknown Kokoro voice" in str(e):
+                    raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=503, detail=str(e))
+            except asyncio.TimeoutError as e:
+                raise HTTPException(status_code=504, detail=f"TTS timed out: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"TTS failed: {e}")
+            return Response(content=dst.read_bytes(), media_type="audio/wav")
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
