@@ -56,6 +56,8 @@ class _FakeOwner:
         self.seen_kwargs = kwargs
         if self.behavior == "request-error":
             raise RVCRequestError("bad audio")
+        if self.behavior == "oom":
+            raise RVCRequestError("CUDA out of memory. Tried to allocate 218 MiB.")
         if self.behavior == "crash":
             raise WorkerCrashed("worker died")
         _sine_wav(kwargs["output_path"])
@@ -204,6 +206,14 @@ async def test_convert_maps_request_error_to_400(tmp_path):
 
 async def test_convert_maps_crash_to_503(tmp_path):
     client, model = _client(tmp_path, behavior="crash")
+    r = await _post(client, _sine_bytes(), model)
+    assert r.status_code == 503
+
+
+async def test_convert_maps_oom_to_503_not_400(tmp_path):
+    # VRAM exhaustion is transient (load/fragmentation dependent): the
+    # client must degrade to its local worker, not fail the command.
+    client, model = _client(tmp_path, behavior="oom")
     r = await _post(client, _sine_bytes(), model)
     assert r.status_code == 503
 

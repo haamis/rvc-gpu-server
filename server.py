@@ -231,6 +231,12 @@ def create_app(
                 )
             except RVCRequestError as e:
                 # Deterministic (bad audio/model): worker is healthy.
+                # EXCEPT VRAM exhaustion: that is load/fragmentation
+                # dependent, so a retry (locally, or later) can succeed —
+                # report it transient so the client degrades to its local
+                # worker instead of hard-failing the command.
+                if "out of memory" in str(e).lower():
+                    raise HTTPException(status_code=503, detail=str(e))
                 raise HTTPException(status_code=400, detail=str(e))
             except asyncio.TimeoutError as e:
                 raise HTTPException(status_code=504, detail=f"conversion timed out: {e}")
