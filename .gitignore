@@ -1,9 +1,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-# Heavy data: rsynced from the thin client, not versioned.
+# Heavy data: rsynced from boksi, not versioned.
 rvc_models/
 rvc_infer/
+models/
 # Local scratch / secrets.
 *.log
 .env
