@@ -545,6 +545,12 @@ def assign_voices(
     greedy closest-match; whatever remains pairs up in first-appearance /
     config order. A cluster with no voice left over stays unmapped (its
     segments keep the original audio).
+
+    More clusters than voices (multi-speaker clip, few models): every
+    measured surplus cluster shares its nearest-pitch voice instead of
+    dropping to original audio — a stable global mapping, so voices never
+    flip mid-clip. Unmeasured surplus clusters keep original audio (no pitch
+    to place them by).
     """
     order = {c: i for i, c in enumerate(first_appearance)}
     voice_order = {v: i for i, v in enumerate(voices)}
@@ -561,6 +567,14 @@ def assign_voices(
     if len(measured) == len(profiled):
         # Full rank alignment: monotone in pitch by construction.
         mapping.update(zip(measured, profiled))
+    elif profiled and len(measured) > len(voices):
+        # Surplus measured clusters (more speakers than voices): every
+        # cluster takes its nearest-pitch voice, many-to-one. Running the
+        # 1:1 greedy first would spend voices on the closest pairs and
+        # strand near-duplicate clusters on far voices (or silence).
+        for c in measured:
+            v = min(profiled, key=lambda v: abs(math.log2(float(f0s[c]) / float(voice_f0[v]))))
+            mapping[c] = v
     else:
         # Partial information: closest-match the known subset...
         candidates = sorted(
@@ -584,6 +598,15 @@ def assign_voices(
     rest_clusters = [c for c in first_appearance if c not in mapping]
     rest_voices = [v for v in voices if v not in set(mapping.values())]
     mapping.update(zip(rest_clusters, rest_voices))
+    if profiled:
+        # Surplus measured clusters share their nearest-pitch voice
+        # (many-to-one). Only reached when clusters outnumber voices;
+        # N<=K outcomes are untouched by this.
+        for c in first_appearance:
+            if c in mapping or f0s.get(c) is None:
+                continue
+            v = min(profiled, key=lambda v: abs(math.log2(float(f0s[c]) / float(voice_f0[v]))))
+            mapping[c] = v
     return mapping
 
 

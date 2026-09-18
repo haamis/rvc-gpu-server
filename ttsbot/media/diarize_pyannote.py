@@ -114,11 +114,14 @@ def diarize_media_pyannote(
     """Full pyannote pipeline: file -> timeline segments with a voice
     assigned to each. Same return contract as diarize.diarize_media.
 
-    threshold > 0 lets pyannote find fewer speakers than requested
-    (collapse semantics, mirroring the local engine); threshold == 0 forces
-    exactly len(voices) speakers (num_speakers), matching the local
-    no-collapse mode. `run_fn` injects a fake pipeline in tests. Raises on
-    failure; callers own the fallback.
+    threshold <= 0 pins exactly len(voices) speakers (num_speakers — the
+    caller asserts this many speakers exist). threshold > 0 lets pyannote
+    find its natural speaker count, however many that is: capping it at
+    len(voices) forces merged clusters that flip identities over time
+    ("same voice, then both switch" on multi-speaker clips). Surplus
+    clusters share voices by pitch downstream (assign_voices). `run_fn`
+    injects a fake pipeline in tests. Raises on failure; callers own the
+    fallback.
     """
     analysis = analyze_media_pyannote(
         path, len(voices), threshold, hf_token, device=device, run_fn=run_fn
@@ -151,11 +154,7 @@ def analyze_media_pyannote(
 
         run_fn = _run
 
-    kwargs = (
-        {"num_speakers": k}
-        if threshold <= 0
-        else {"min_speakers": 1, "max_speakers": k}
-    )
+    kwargs = {"num_speakers": k} if threshold <= 0 else {}
     annotation = run_fn(path, **kwargs)
     log.info("pyannote diarization took %.1fs", time.time() - t0)
 
