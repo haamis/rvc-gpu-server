@@ -250,7 +250,11 @@ def format_voice_entry(name: str, pth: Path, index: Path | None, provenance: str
     rvc_lines[-1] = rvc_lines[-1].rstrip(",") + "}"
     lines = [
         f"  {name}:",
+        # No kokoro group: the voice inherits the global KOKORO_VOICE donor
+        # until cast explicitly (RVC erases donor identity anyway). No cloud
+        # voice either: the cloud tier stays skipped until one is set.
         f"    piper: {{voice: en_US-lessac-medium, speed: 0.7}}",
+        f"    cloud: {{speed: 1.0}}",
         *rvc_lines,
         f"    # Added by tools/rvc_models.py — {provenance}",
     ]
@@ -320,10 +324,10 @@ def main(argv: list[str] | None = None) -> None:
 
     def add_common(p):
         p.add_argument("--as", dest="name", help="voice name (default: derived from the zip)")
-        p.add_argument("--models-dir", type=Path, default=DEFAULT_MODEL_DIR)
-        p.add_argument("--config", type=Path, default=None,
-                       help="thin-client voices.yaml to update in place; when omitted, "
-                            "the voices.yaml block is printed for manual pasting")
+        p.add_argument("--models-dir", type=Path, default=DEFAULT_MODEL_DIR,
+                       help="voice-model target dir (point at the mounted ifrit dir "
+                            "to install straight onto the GPU box)")
+        p.add_argument("--config", type=Path, default=PROJECT_ROOT / "config" / "voices.yaml")
         p.add_argument("--force", action="store_true", help="overwrite existing model files")
 
     p_add = sub.add_parser("add", help="search/download a model and add it to the config")
