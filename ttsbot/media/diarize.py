@@ -907,9 +907,13 @@ def profile_f0(profiles: dict[str, dict], name: str, voice_cfg) -> float | None:
         from pathlib import Path
 
         try:
-            if Path(voice_cfg.rvc_model).stat().st_mtime != stored_mtime:
-                return None
+            actual_mtime = Path(voice_cfg.rvc_model).stat().st_mtime
         except OSError:
+            return None
+        # Tolerance, not equality: coarse filesystems (sshfs reports whole
+        # seconds) disagree with fine ones by fractions of a second for the
+        # same file. A real model swap moves mtime by far more than this.
+        if abs(actual_mtime - stored_mtime) > 1.0:
             return None
     f0 = entry.get("f0")
     return float(f0) if f0 else None
