@@ -1,0 +1,24 @@
+# Restart the GPU server after suspend/resume.
+#
+# The worker's CUDA context does not survive a suspend/resume cycle with the
+# open NVIDIA modules (nvidia-driver-595-open, kernel 7.x): every /convert
+# then fails with "CUDA-capable device(s) is/are busy or unavailable" until
+# the process is restarted. A fresh worker per resume is the reliable fix.
+#
+# Install on the host:
+#   sudo cp systemd/rvc-server-resume.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable rvc-server-resume.service
+[Unit]
+Description=Restart RVC GPU server after resume
+After=nvidia-resume.service docker.service systemd-suspend.service systemd-hibernate.service systemd-suspend-then-hibernate.service
+Wants=nvidia-resume.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker restart rvc-server
+
+[Install]
+WantedBy=systemd-suspend.service
+WantedBy=systemd-hibernate.service
+WantedBy=systemd-suspend-then-hibernate.service

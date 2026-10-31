@@ -1,0 +1,42 @@
+services:
+  rvc-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ttsbot-rvc-server:latest
+    container_name: rvc-server
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    ports:
+      - "${RVC_SERVER_PORT:-8001}:8001"
+    env_file:
+      - ${HOME}/.config/rvc-server/env
+    environment:
+      RVC_MODEL_ROOT: /home/haama/TTS-bot/rvc_models
+      RVC_WORKER_ROOT: /rvc_infer
+      KOKORO_MODEL_DIR: /models/kokoro
+      PYTHONPATH: /app:/ttsbot-diarize
+      RVC_DEVICE: ${RVC_DEVICE:-auto}
+      RVC_CUDA_GRAPH: "0"
+      RVC_SERVER_CHUNK_SEC: ${RVC_SERVER_CHUNK_SEC:-20}
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_TRIM_THRESHOLD_: "65536"
+      HF_HOME: /home/haama/.cache/huggingface
+      TORCH_HOME: /home/haama/.cache/torch
+      HOME: /home/haama
+    user: "1000:1000"
+    volumes:
+      - ${HOME}/TTS-bot/rvc_models:/home/haama/TTS-bot/rvc_models:ro
+      - ${HOME}/rvc-gpu-server/rvc_infer:/rvc_infer:ro
+      - ${HOME}/rvc-gpu-server/models:/models:ro
+      - ${HOME}/ttsbot-diarize:/ttsbot-diarize:ro
+      - ${HOME}/.cache/huggingface:/home/haama/.cache/huggingface
+      - ${HOME}/.cache/torch:/home/haama/.cache/torch
+    shm_size: "2gb"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

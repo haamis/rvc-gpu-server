@@ -1,0 +1,10 @@
+# NVIDIA 2060 overlay. Requires the NVIDIA driver + nvidia-container-toolkit
+# on the host. Use only when the card is installed:
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d
+services:
+  rvc-server:
+    gpus: all
+    environment:
+      # Without this, kokoro-onnx tries every provider (TensorRT first) and
+      # falls back to CPU when TensorRT is absent.
+      ONNX_PROVIDER: CUDAExecutionProvider

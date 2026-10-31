@@ -42,8 +42,10 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from worker_owner import RVCRequestError, RvcWorkerOwner
-from ttsbot.media.diarize import analyze_media
+from ttsbot_diarize.diarize import analyze_media
 import kokoro_engine
+import chatterbox_engine
+import whisperx_engine
 
 log = logging.getLogger("rvc_server")
 
@@ -60,6 +62,11 @@ RVC_DEVICE = os.getenv("RVC_DEVICE", "auto")
 # Gated pyannote weights (accepted once per HF account; cached after first
 # download). Empty = pyannote engine unavailable (501, client falls back).
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+# Pyannote model ID: v3 uses pyannote/speaker-diarization-3.1, v4+ uses
+# pyannote/speaker-diarization-community-1 (or precision-2). Override via
+# PYANNOTE_MODEL_ID env var.
+PYANNOTE_MODEL_ID = os.getenv("PYANNOTE_MODEL_ID", "pyannote/speaker-diarization-community-1")
+os.environ["PYANNOTE_MODEL_ID"] = PYANNOTE_MODEL_ID  # ensure child modules see it
 # Long inputs OOM the 8GB card in a single pass (activations scale with
 # length), so inputs over CHUNK_SEC are converted in overlapping windows and
 # crossfade-stitched. Read dynamically (tests monkeypatch the globals).
@@ -314,11 +321,12 @@ def create_app(
                 )
             except RVCRequestError as e:
                 # Deterministic (bad audio/model): worker is healthy.
-                # EXCEPT VRAM exhaustion: that is load/fragmentation
-                # dependent, so a retry (locally, or later) can succeed —
-                # report it transient so the client degrades to its local
-                # worker instead of hard-failing the command.
-                if "out of memory" in str(e).lower():
+                # EXCEPT resource pressure / device loss: those are
+                # load- or suspend-dependent, so a retry (locally, or later)
+                # can succeed — report them transient so the client degrades
+                # to its local worker instead of hard-failing the command.
+                msg = str(e).lower()
+                if "out of memory" in msg or "busy or unavailable" in msg:
                     raise HTTPException(status_code=503, detail=str(e))
                 raise HTTPException(status_code=400, detail=str(e))
             except asyncio.TimeoutError as e:
@@ -454,6 +462,169 @@ def create_app(
             except Exception as e:
                 raise HTTPException(status_code=503, detail=f"TTS failed: {e}")
             return Response(content=dst.read_bytes(), media_type="audio/wav")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    @app.post("/chatterbox")
+    async def chatterbox(
+        text: str = Form(...),
+        audio_prompt_path: str = Form(""),
+        model: str = Form("turbo"),
+        exaggeration: float = Form(0.5),
+        cfg_weight: float = Form(0.5),
+        authorization: str | None = Header(None),
+        protocol: str | None = Header(None, alias=PROTOCOL_HEADER),
+    ) -> Response:
+        """Chatterbox-Turbo/Nano TTS on the GPU: text + optional reference clip -> wav.
+
+        Identity + prosody in one step (zero-shot cloning). The thin client's
+        cloner tier when TTS_PROVIDER=auto: replaces the Kokoro->RVC chain for
+        !speak/!generate. Deterministic errors (bad input) are 400; anything
+        else is 503 (client falls through its local tiers).
+        """
+        check_protocol(protocol)
+        check_auth(authorization, app.state.require_token)
+
+        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
+        scratch.mkdir(parents=True, exist_ok=True)
+        dst = scratch / "chatterbox.wav"
+        try:
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        chatterbox_engine.synthesize,
+                        text,
+                        audio_prompt_path if audio_prompt_path else None,
+                        dst,
+                        model,
+                        exaggeration,
+                        cfg_weight,
+                    ),
+                    timeout=JOB_TIMEOUT,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            except asyncio.TimeoutError as e:
+                raise HTTPException(status_code=504, detail=f"Chatterbox TTS timed out: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"Chatterbox TTS failed: {e}")
+            return Response(content=dst.read_bytes(), media_type="audio/wav")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    @app.post("/vc")
+    async def vc(
+        audio: UploadFile = File(...),
+        target_voice: UploadFile = File(...),
+        authorization: str | None = Header(None),
+        protocol: str | None = Header(None, alias=PROTOCOL_HEADER),
+    ) -> Response:
+        """Chatterbox-VC on the GPU: source audio + target voice reference -> converted wav.
+
+        Zero-shot voice conversion alternative to RVC. Uses the same reference clips
+        as the Chatterbox cloner. Deterministic errors (bad audio) are 400;
+        anything else is 503 (client falls back to RVC).
+        """
+        check_protocol(protocol)
+        check_auth(authorization, app.state.require_token)
+
+        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
+        scratch.mkdir(parents=True, exist_ok=True)
+        src = scratch / f"src{Path(audio.filename or 'in.wav').suffix or '.wav'}"
+        tgt = scratch / f"tgt{Path(target_voice.filename or 'ref.wav').suffix or '.wav'}"
+        dst = scratch / "vc.wav"
+        try:
+            src.write_bytes(await audio.read())
+            tgt.write_bytes(await target_voice.read())
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        chatterbox_engine.convert_vc,
+                        src,
+                        tgt,
+                        dst,
+                    ),
+                    timeout=JOB_TIMEOUT,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            except asyncio.TimeoutError as e:
+                raise HTTPException(status_code=504, detail=f"Chatterbox-VC timed out: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"Chatterbox-VC failed: {e}")
+            return Response(content=dst.read_bytes(), media_type="audio/wav")
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    @app.post("/whisperx")
+    async def whisperx(
+        audio: UploadFile = File(...),
+        language: str = Form("en"),
+        diarization: str = Form(""),
+        authorization: str | None = Header(None),
+        protocol: str | None = Header(None, alias=PROTOCOL_HEADER),
+    ) -> JSONResponse:
+        """WhisperX transcription + alignment + optional speaker assignment.
+
+        Returns JSON with segments and words. If `diarization` JSON is provided
+        (from /diarize), assigns speakers to words/segments.
+        """
+        check_protocol(protocol)
+        check_auth(authorization, app.state.require_token)
+
+        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
+        scratch.mkdir(parents=True, exist_ok=True)
+        src = scratch / f"input{Path(audio.filename or 'in.wav').suffix or '.wav'}"
+        try:
+            src.write_bytes(await audio.read())
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        whisperx_engine.transcribe_and_align,
+                        str(src),
+                        language,
+                    ),
+                    timeout=JOB_TIMEOUT,
+                )
+                # Assign speakers if diarization provided
+                if diarization:
+                    import json
+                    diar_segments = json.loads(diarization)
+                    result = whisperx_engine.assign_speakers_to_words(result, diar_segments)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            except asyncio.TimeoutError as e:
+                raise HTTPException(status_code=504, detail=f"WhisperX timed out: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"WhisperX failed: {e}")
+
+            # Convert result to JSON-serializable format
+            segments_out = []
+            for seg in result.get("segments", []):
+                seg_out = {
+                    "id": seg.get("id"),
+                    "start": seg.get("start"),
+                    "end": seg.get("end"),
+                    "text": seg.get("text"),
+                    "speaker": seg.get("speaker"),
+                    "words": [],
+                }
+                for w in seg.get("words", []):
+                    seg_out["words"].append({
+                        "word": w.get("word"),
+                        "start": w.get("start"),
+                        "end": w.get("end"),
+                        "speaker": w.get("speaker"),
+                    })
+                segments_out.append(seg_out)
+
+            return JSONResponse(content={"segments": segments_out})
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 

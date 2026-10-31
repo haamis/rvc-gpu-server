@@ -1,0 +1,11 @@
+.git
+rvc_infer
+rvc_models
+models
+tests
+systemd
+tools
+__pycache__
+*.pyc
+.pytest_cache
+*.log
