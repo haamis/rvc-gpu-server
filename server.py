@@ -28,6 +28,8 @@ RVC_WORKER_ROOT, RVC_WORKER_MAX_RSS_MB, RVC_MODEL_ROOT, RVC_GPU_SERVER_JOB_TIMEO
 """
 
 import asyncio
+import hmac
+import json
 import logging
 import os
 import shutil
@@ -78,7 +80,8 @@ def check_auth(authorization: str | None, require_token: str) -> None:
     """Raise 401 unless the Bearer token matches (no-op when unset)."""
     if not require_token:
         return
-    if authorization != f"Bearer {require_token}":
+    expected = f"Bearer {require_token}"
+    if not hmac.compare_digest(authorization or "", expected):
         raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
 
@@ -576,6 +579,16 @@ def create_app(
         check_protocol(protocol)
         check_auth(authorization, app.state.require_token)
 
+        # Validate diarization JSON upfront (fail fast with 400)
+        diar_segments = None
+        if diarization:
+            try:
+                diar_segments = json.loads(diarization)
+                if not isinstance(diar_segments, list):
+                    raise HTTPException(status_code=400, detail="diarization must be a JSON list")
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"invalid diarization JSON: {e}")
+
         scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
         scratch.mkdir(parents=True, exist_ok=True)
         src = scratch / f"input{Path(audio.filename or 'in.wav').suffix or '.wav'}"
@@ -591,9 +604,7 @@ def create_app(
                     timeout=JOB_TIMEOUT,
                 )
                 # Assign speakers if diarization provided
-                if diarization:
-                    import json
-                    diar_segments = json.loads(diarization)
+                if diar_segments is not None:
                     result = whisperx_engine.assign_speakers_to_words(result, diar_segments)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))

@@ -24,8 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 _LOCK = threading.Lock()
 _ASR_MODEL = None
-_ALIGN_MODEL = None
-_ALIGN_METADATA = None
+_ALIGN_MODELS: dict[str, tuple] = {}  # language -> (model, metadata)
 _DEVICE = None
 _COMPUTE_TYPE = None
 
@@ -62,17 +61,19 @@ def _get_asr_model():
 
 
 def _get_align_model(language: str = "en"):
-    """Lazy-load the alignment model (Wav2Vec2)."""
-    global _ALIGN_MODEL, _ALIGN_METADATA
-    if _ALIGN_MODEL is not None and _ALIGN_METADATA is not None:
-        return _ALIGN_MODEL, _ALIGN_METADATA
+    """Lazy-load the alignment model (Wav2Vec2), cached per language."""
+    # Fast path: already cached for this language
+    if language in _ALIGN_MODELS:
+        return _ALIGN_MODELS[language]
     with _LOCK:
-        if _ALIGN_MODEL is not None and _ALIGN_METADATA is not None:
-            return _ALIGN_MODEL, _ALIGN_METADATA
+        # Double-check inside lock
+        if language in _ALIGN_MODELS:
+            return _ALIGN_MODELS[language]
         device, _ = _resolve_device()
         log.info("Loading WhisperX alignment model for language: %s on %s", language, device)
-        _ALIGN_MODEL, _ALIGN_METADATA = whisperx.load_align_model(language_code=language, device=device)
-        return _ALIGN_MODEL, _ALIGN_METADATA
+        model, metadata = whisperx.load_align_model(language_code=language, device=device)
+        _ALIGN_MODELS[language] = (model, metadata)
+        return model, metadata
 
 
 def transcribe_and_align(
