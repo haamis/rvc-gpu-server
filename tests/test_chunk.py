@@ -90,6 +90,48 @@ class _CopyOwner:
         return str(kwargs["output_path"])
 
 
+@pytest.mark.parametrize("duration", [0.5, 3.0])
+@pytest.mark.parametrize("length_delta", [-320, 320])
+async def test_conversion_keeps_chunk_timing(tmp_path, monkeypatch, duration, length_delta):
+    monkeypatch.setattr(server, "CHUNK_SEC", 1.0)
+    monkeypatch.setattr(server, "CHUNK_OVERLAP_SEC", 0.25)
+    sr = 8000
+    audio = np.zeros(round(duration * sr), dtype=np.float32)
+    markers = [round((0.1 + i * 0.75) * sr) for i in range(4)]
+    markers = [i for i in markers if i < len(audio)]
+    audio[markers] = 0.5
+    src, dst = tmp_path / "in.wav", tmp_path / "out.wav"
+    sf.write(src, audio, sr)
+
+    class Owner:
+        async def convert(self, *, input_path, output_path):
+            data, rate = sf.read(input_path, always_2d=True)
+            data = np.repeat(data, 2, axis=0)
+            if length_delta < 0:
+                data = data[:length_delta]
+            else:
+                data = np.pad(data, ((0, length_delta), (0, 0)))
+            sf.write(output_path, data, rate * 2)
+
+    await server._convert_chunked(Owner(), src, dst, tmp_path)
+    result, rate = sf.read(dst)
+    assert rate == sr * 2
+    assert len(result) == len(audio) * 2
+    assert np.allclose(result[np.array(markers) * 2], 0.5, atol=1e-4)
+
+
+async def test_conversion_rejects_empty_output(tmp_path):
+    src, dst = tmp_path / "in.wav", tmp_path / "out.wav"
+    sf.write(src, np.zeros(8000), 8000)
+
+    class Owner:
+        async def convert(self, *, input_path, output_path):
+            sf.write(output_path, np.zeros(0), 8000)
+
+    with pytest.raises(RuntimeError, match="empty audio chunk"):
+        await server._convert_chunked(Owner(), src, dst, tmp_path)
+
+
 async def test_endpoint_chunks_and_stitches(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "CHUNK_SEC", 1.0)
     monkeypatch.setattr(server, "CHUNK_OVERLAP_SEC", 0.25)

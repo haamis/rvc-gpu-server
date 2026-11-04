@@ -1,7 +1,7 @@
 # rvc-gpu-server — RVC/TTS worker server (ifrit side)
 
 FastAPI server for the bot: `GET /health`, `POST /convert`, `POST /diarize`,
-`POST /tts`, `POST /chatterbox`, `POST /vc`, `POST /whisperx`. The Python
+`POST /separate`, `POST /tts`, `POST /chatterbox`, `POST /vc`, `POST /whisperx`. The Python
 stack is in the image; the large assets are bind-mounted from the host.
 
 ## Layout
@@ -49,6 +49,26 @@ curl localhost:8001/health   # {"status":"ok","device":"cpu"|"cuda",...}
 Server secrets and `HF_TOKEN`/`PYANNOTE_MODEL_ID` come from
 `~/.config/rvc-server/env` (chmod 600, never in git). The thin client's
 `.env` needs the same `RVC_GPU_SERVER_TOKEN`.
+
+### Vocal separation (`!rsing`)
+
+`POST /separate` accepts multipart `audio` and `model` (default
+`vocals-bs-roformer-368`) with the same bearer token and protocol header as
+`/convert`. It returns JSON `vocals_b64` and `instrumental_b64` WAVs, as expected
+by the bot. PyMSS uses CUDA/mixed precision on ifrit and releases its model after
+each request. Separation jobs are serialized to avoid loading multiple models.
+
+Provision the default checkpoint on the **ifrit host**, outside the read-only
+container mount (about 640 MB; not included in the Docker image):
+
+```bash
+curl -fL --retry 2 -o ~/rvc-gpu-server/rvc_infer/assets/pymss_weights/model_bs_roformer_ep_368_sdr_12.9628.ckpt \
+  https://huggingface.co/baicai1145/pymss/resolve/main/vocal/vocal_extraction/model_bs_roformer_ep_368_sdr_12.9628.ckpt
+```
+
+The matching YAML ships with `rvc_infer`. Missing weights/CUDA failures return
+503; invalid models/audio return 400. Rebuild **on ifrit** using both compose
+files above; rebuilding the bot on boksi does not deploy a server endpoint.
 
 To test while the old service is still on 8001, publish a spare port:
 

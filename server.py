@@ -28,12 +28,14 @@ RVC_WORKER_ROOT, RVC_WORKER_MAX_RSS_MB, RVC_MODEL_ROOT, RVC_GPU_SERVER_JOB_TIMEO
 """
 
 import asyncio
+import base64
 import hmac
 import json
 import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -154,11 +156,7 @@ def _plan_chunks(total: int, chunk: int, overlap: int) -> list[tuple[int, int]]:
 
 
 def _stitch(chunks: list[np.ndarray], overlap: int) -> np.ndarray:
-    """Concatenate chunk outputs with a linear crossfade over `overlap` samples.
-
-    Defensive about RVC output lengths (duration preservation is approximate):
-    shortfalls are zero-padded, overruns trimmed.
-    """
+    """Concatenate duration-corrected chunks with a linear crossfade."""
     if len(chunks) == 1:
         return chunks[0]
     out = chunks[0].copy()
@@ -175,60 +173,43 @@ def _stitch(chunks: list[np.ndarray], overlap: int) -> np.ndarray:
     return out
 
 
-def _separate_vocals_sync(input_path: str, vocals_path: str, instrumental_path: str, model_name: str) -> None:
-    """Synchronous vocal separation using PyMSS (runs in thread pool)."""
-    import sys
-    import os
-    import torch
+_SEPARATION_LOCK = threading.Lock()
 
-    # Ensure rvc_infer is on sys.path for pymss imports
+
+def _separate_vocals_sync(audio: bytes, model_name: str) -> dict[str, str]:
+    """Own scratch files and the GPU lock even if the HTTP request times out."""
+    import sys
+
     rvc_root = Path(os.environ.get("RVC_WORKER_ROOT", "/rvc_infer"))
     if str(rvc_root) not in sys.path:
         sys.path.insert(0, str(rvc_root))
+    os.environ.setdefault("weight_pymss_root", str(rvc_root / "assets" / "pymss_weights"))
 
-    from tools.pymss_webui import (
-        MSSTBatchSeparator,
-        resolve_model,
-        MODEL_SAMPLE_RATE,
-        AUDIO_PARAMS,
-        clean_path,
-    )
-
+    from tools.pymss_webui import MSSTBatchSeparator, resolve_model
     spec = resolve_model(model_name)
+    if (spec.desired_stem, spec.secondary_stem) != ("vocals", "instrumental"):
+        raise ValueError("separation model must produce vocals and instrumental stems")
 
-    # Device selection: use CUDA if available (this is the GPU server)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    use_cuda = device == "cuda"
-    batch_size = 1 if not use_cuda else spec.batch_size
-    chunk_size = 352800
-    overlap_size = spec.overlap_size
-
-    desired_root = str(Path(vocals_path).parent / "vocals_out")
-    secondary_root = str(Path(instrumental_path).parent / "inst_out")
-
-    with MSSTBatchSeparator(
-        spec,
-        "wav",
-        desired_root,
-        secondary_root,
-        model_dtype="auto",
-        progress_callback=None,
-        separation_logger=None,
-    ) as batch:
-        result = batch.separate_file(input_path)
-
-    # MSSTBatchSeparator writes to desired_root/secondary_root with suffixes.
-    # Find the output files and copy them to the requested paths.
-    import shutil
-    for out_path in result["outputs"]:
-        name = Path(out_path).name
-        if spec.desired_suffix in name:
-            shutil.copy2(out_path, vocals_path)
-        elif spec.secondary_suffix in name:
-            shutil.copy2(out_path, instrumental_path)
-
-    if not Path(vocals_path).exists() or not Path(instrumental_path).exists():
-        raise RuntimeError("Separation did not produce expected output files")
+    with _SEPARATION_LOCK, tempfile.TemporaryDirectory(prefix="rvc_separate_") as scratch:
+        root = Path(scratch)
+        src = root / "input.wav"
+        src.write_bytes(audio)
+        try:
+            info = sf.info(src)
+        except (RuntimeError, sf.LibsndfileError) as e:
+            raise ValueError("invalid separation audio") from e
+        if not info.frames:
+            raise ValueError("empty separation audio")
+        # PyMSS selects CUDA and mixed precision via the upstream RVC config.
+        with MSSTBatchSeparator(spec, "wav", str(root / "vocals"), str(root / "instrumental")) as batch:
+            result = batch.separate_file(str(src))
+        outputs = {}
+        for stem, suffix in (("vocals", spec.desired_suffix), ("instrumental", spec.secondary_suffix)):
+            path = next((Path(p) for p in result["outputs"] if Path(p).stem == f"input_{suffix}"), None)
+            if path is None or not path.is_file() or not path.stat().st_size:
+                raise RuntimeError(f"Separation did not produce {stem}")
+            outputs[f"{stem}_b64"] = base64.b64encode(path.read_bytes()).decode()
+        return outputs
 
 
 async def _convert_chunked(owner, src: Path, dst: Path, scratch: Path, **params) -> None:
@@ -238,9 +219,6 @@ async def _convert_chunked(owner, src: Path, dst: Path, scratch: Path, **params)
     chunk = int(CHUNK_SEC * sr)
     overlap = int(CHUNK_OVERLAP_SEC * sr)
     windows = _plan_chunks(total, chunk, overlap)
-    if len(windows) == 1:
-        await owner.convert(input_path=src, output_path=dst, **params)
-        return
     log.info("chunked convert: %.1fs -> %d windows", total / sr, len(windows))
     outs: list[np.ndarray] = []
     out_sr = sr
@@ -250,6 +228,13 @@ async def _convert_chunked(owner, src: Path, dst: Path, scratch: Path, **params)
         sf.write(str(c_in), audio[s:e], sr)
         await owner.convert(input_path=c_in, output_path=c_out, **params)
         data, out_sr = sf.read(str(c_out), dtype="float32", always_2d=True)
+        if not len(data):
+            raise RuntimeError("RVC returned an empty audio chunk")
+        # RVC can drop tail frames; preserve window timing before stitching to avoid drift.
+        expected = round(e * out_sr / sr) - round(s * out_sr / sr)
+        data = data[:expected]
+        if len(data) < expected:
+            data = np.pad(data, ((0, expected - len(data)), (0, 0)))
         outs.append(data)
     o = int(CHUNK_OVERLAP_SEC * out_sr)
     stitched = _stitch(outs, o)
@@ -711,53 +696,19 @@ def create_app(
         check_protocol(protocol)
         check_auth(authorization, app.state.require_token)
 
-        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
-        scratch.mkdir(parents=True, exist_ok=True)
-        src = scratch / f"input{Path(audio.filename or 'in.wav').suffix or '.wav'}"
-        vocals_dst = scratch / "vocals.wav"
-        inst_dst = scratch / "instrumental.wav"
         try:
-            src.write_bytes(await audio.read())
-            try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _separate_vocals_sync,
-                        str(src),
-                        str(vocals_dst),
-                        str(inst_dst),
-                        model,
-                    ),
-                    timeout=JOB_TIMEOUT,
-                )
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-            except RuntimeError as e:
-                # Unknown model = client config error (fail fast); anything
-                # else (missing models, onnx/cuda failure) is server-side trouble.
-                if "Unknown separation model" in str(e) or "not found" in str(e).lower():
-                    raise HTTPException(status_code=400, detail=str(e))
-                raise HTTPException(status_code=503, detail=str(e))
-            except asyncio.TimeoutError as e:
-                raise HTTPException(status_code=504, detail=f"separation timed out: {e}")
-            except Exception as e:
-                raise HTTPException(status_code=503, detail=f"separation failed: {e}")
-
-            # Return both files as multipart? Simpler: return JSON with base64? No, too large.
-            # Return a zip? Too complex. Instead: return vocals as response body,
-            # instrumental as header? No, not standard.
-            # Best: return JSON with both file paths (but they're on server).
-            # For thin client: we need both files. Return them as a tar/zip stream?
-            # Simplest for now: return vocals in body, instrumental in X-Instrumental header as base64?
-            # Actually, let's return both as a multipart response.
-            import base64
-            vocals_b64 = base64.b64encode(vocals_dst.read_bytes()).decode()
-            inst_b64 = base64.b64encode(inst_dst.read_bytes()).decode()
-            return JSONResponse(content={
-                "vocals_b64": vocals_b64,
-                "instrumental_b64": inst_b64,
-            })
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_separate_vocals_sync, await audio.read(), model),
+                timeout=JOB_TIMEOUT,
+            )
+            return JSONResponse(content=result)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except asyncio.TimeoutError as e:
+            raise HTTPException(status_code=504, detail="separation timed out") from e
+        except Exception as e:
+            log.exception("Vocal separation failed")
+            raise HTTPException(status_code=503, detail=f"separation failed: {e}") from e
 
     return app
 
