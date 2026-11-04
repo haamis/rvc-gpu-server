@@ -29,9 +29,9 @@ services:
     user: "1000:1000"
     volumes:
       - ${HOME}/TTS-bot/rvc_models:/home/haama/TTS-bot/rvc_models:ro
-      - ${HOME}/rvc-gpu-server/rvc_infer:/rvc_infer:ro
+      - ${HOME}/TTS-bot/rvc_infer:/rvc_infer:ro
       - ${HOME}/rvc-gpu-server/models:/models:ro
-      - ${HOME}/ttsbot-diarize:/ttsbot-diarize:ro
+      - ${HOME}/TTS-bot/ttsbot-diarize:/ttsbot-diarize:ro
       - ${HOME}/.cache/huggingface:/home/haama/.cache/huggingface
       - ${HOME}/.cache/torch:/home/haama/.cache/torch
     shm_size: "2gb"

@@ -48,6 +48,7 @@ from ttsbot_diarize.diarize import analyze_media
 import kokoro_engine
 import chatterbox_engine
 import whisperx_engine
+from ttsbot_diarize.audio import write_wav, load_mono, resample
 
 log = logging.getLogger("rvc_server")
 
@@ -172,6 +173,62 @@ def _stitch(chunks: list[np.ndarray], overlap: int) -> np.ndarray:
         else:
             out = np.concatenate([out, nxt])
     return out
+
+
+def _separate_vocals_sync(input_path: str, vocals_path: str, instrumental_path: str, model_name: str) -> None:
+    """Synchronous vocal separation using PyMSS (runs in thread pool)."""
+    import sys
+    import os
+    import torch
+
+    # Ensure rvc_infer is on sys.path for pymss imports
+    rvc_root = Path(os.environ.get("RVC_WORKER_ROOT", "/rvc_infer"))
+    if str(rvc_root) not in sys.path:
+        sys.path.insert(0, str(rvc_root))
+
+    from tools.pymss_webui import (
+        MSSTBatchSeparator,
+        resolve_model,
+        MODEL_SAMPLE_RATE,
+        AUDIO_PARAMS,
+        clean_path,
+    )
+
+    spec = resolve_model(model_name)
+
+    # Device selection: use CUDA if available (this is the GPU server)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    use_cuda = device == "cuda"
+    batch_size = 1 if not use_cuda else spec.batch_size
+    chunk_size = 352800
+    overlap_size = spec.overlap_size
+
+    desired_root = str(Path(vocals_path).parent / "vocals_out")
+    secondary_root = str(Path(instrumental_path).parent / "inst_out")
+
+    with MSSTBatchSeparator(
+        spec,
+        "wav",
+        desired_root,
+        secondary_root,
+        model_dtype="auto",
+        progress_callback=None,
+        separation_logger=None,
+    ) as batch:
+        result = batch.separate_file(input_path)
+
+    # MSSTBatchSeparator writes to desired_root/secondary_root with suffixes.
+    # Find the output files and copy them to the requested paths.
+    import shutil
+    for out_path in result["outputs"]:
+        name = Path(out_path).name
+        if spec.desired_suffix in name:
+            shutil.copy2(out_path, vocals_path)
+        elif spec.secondary_suffix in name:
+            shutil.copy2(out_path, instrumental_path)
+
+    if not Path(vocals_path).exists() or not Path(instrumental_path).exists():
+        raise RuntimeError("Separation did not produce expected output files")
 
 
 async def _convert_chunked(owner, src: Path, dst: Path, scratch: Path, **params) -> None:
@@ -636,6 +693,69 @@ def create_app(
                 segments_out.append(seg_out)
 
             return JSONResponse(content={"segments": segments_out})
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    @app.post("/separate")
+    async def separate(
+        audio: UploadFile = File(...),
+        model: str = Form("vocals-bs-roformer-368"),
+        authorization: str | None = Header(None),
+        protocol: str | None = Header(None, alias=PROTOCOL_HEADER),
+    ) -> Response:
+        """Vocal separation: source audio -> {vocals.wav, instrumental.wav}.
+
+        Uses PyMSS (BS-RoFormer / Mel-Band-RoFormer) on the GPU.
+        Deterministic errors (bad audio/model) are 400; anything else is 503.
+        """
+        check_protocol(protocol)
+        check_auth(authorization, app.state.require_token)
+
+        scratch = Path(tempfile.gettempdir()) / "rvc_server" / uuid.uuid4().hex[:12]
+        scratch.mkdir(parents=True, exist_ok=True)
+        src = scratch / f"input{Path(audio.filename or 'in.wav').suffix or '.wav'}"
+        vocals_dst = scratch / "vocals.wav"
+        inst_dst = scratch / "instrumental.wav"
+        try:
+            src.write_bytes(await audio.read())
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _separate_vocals_sync,
+                        str(src),
+                        str(vocals_dst),
+                        str(inst_dst),
+                        model,
+                    ),
+                    timeout=JOB_TIMEOUT,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                # Unknown model = client config error (fail fast); anything
+                # else (missing models, onnx/cuda failure) is server-side trouble.
+                if "Unknown separation model" in str(e) or "not found" in str(e).lower():
+                    raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=503, detail=str(e))
+            except asyncio.TimeoutError as e:
+                raise HTTPException(status_code=504, detail=f"separation timed out: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=503, detail=f"separation failed: {e}")
+
+            # Return both files as multipart? Simpler: return JSON with base64? No, too large.
+            # Return a zip? Too complex. Instead: return vocals as response body,
+            # instrumental as header? No, not standard.
+            # Best: return JSON with both file paths (but they're on server).
+            # For thin client: we need both files. Return them as a tar/zip stream?
+            # Simplest for now: return vocals in body, instrumental in X-Instrumental header as base64?
+            # Actually, let's return both as a multipart response.
+            import base64
+            vocals_b64 = base64.b64encode(vocals_dst.read_bytes()).decode()
+            inst_b64 = base64.b64encode(inst_dst.read_bytes()).decode()
+            return JSONResponse(content={
+                "vocals_b64": vocals_b64,
+                "instrumental_b64": inst_b64,
+            })
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
