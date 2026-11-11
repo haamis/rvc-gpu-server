@@ -105,7 +105,10 @@ async def test_diarize_auth(tmp_path, monkeypatch):
 
 
 async def test_diarize_pyannote_branch(tmp_path, monkeypatch):
-    import ttsbot.media.diarize_pyannote as pmod
+    import ttsbot_diarize.diarize_pyannote as pmod
+
+    # The bundled legacy module is incompatible with the server's pyannote 4.
+    monkeypatch.setitem(sys.modules, "ttsbot.media.diarize_pyannote", None)
 
     from ttsbot.media.diarize import DiarizationAnalysis, Segment
 

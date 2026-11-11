@@ -412,7 +412,7 @@ def create_app(
                     status_code=501, detail="pyannote engine needs HF_TOKEN on this server"
                 )
             try:
-                from ttsbot.media.diarize_pyannote import analyze_media_pyannote
+                from ttsbot_diarize.diarize_pyannote import analyze_media_pyannote
             except Exception as e:
                 raise HTTPException(
                     status_code=501, detail=f"pyannote engine not installed: {e}"

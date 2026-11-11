@@ -21,7 +21,7 @@ stack is in the image; the large assets are bind-mounted from the host.
 | `models/` | Kokoro models (mounted at `/models`, not in the image) |
 | `rvc_models/` | mirror of the bot host's voice models (mounted at the same absolute path) |
 | `ttsbot/media/diarize.py`, `ttsbot/media/audio.py` | **byte-identical mirrors** of the thin client's analysis code (`analyze_media` etc.) — re-copy on change, never edit (same rule as `worker.py`) |
-| `ttsbot-diarize/` (mounted) | thin client's `ttsbot_diarize` package (mounted at `/ttsbot-diarize`) |
+| `ttsbot-diarize/` (mounted) | thin client's `ttsbot_diarize` package (mounted at `/ttsbot-diarize`), including the pyannote 3/4-compatible engine used by `/diarize` |
 | `tests/` | server tests |
 
 ## Docker (current)
