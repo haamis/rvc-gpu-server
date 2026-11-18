@@ -1,0 +1,9 @@
+# ifrit mounts its RVC and diarize code from its own tree, not from a
+# ~/TTS-bot copy (the layout the base compose defaults to, used by the 4080).
+# Merge order:
+#   docker compose -f compose.yaml -f compose.ifrit.yaml -f compose.gpu.yaml
+services:
+  rvc-server:
+    volumes:
+      - ${HOME}/rvc-gpu-server/rvc_infer:/rvc_infer:ro
+      - ${HOME}/ttsbot-diarize:/ttsbot-diarize:ro
