@@ -120,8 +120,29 @@ sudo systemctl daemon-reload
 sudo systemctl enable rvc-server-resume.service
 ```
 
+sudo cp systemd/rvc-server-resume.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable rvc-server-resume.service
+```
+
 The same condition is reported to the thin client as a transient 503, so it
 falls back to its local worker instead of failing the command.
+
+**Wake-on-LAN is not persistent.** The `Wake-on` flag is volatile and resets to
+`d` on every boot, so magic packets reach the NIC and are ignored unless
+something re-arms it on each link-up. NetworkManager does that when the
+connection profile sets it:
+
+```bash
+sudo nmcli connection modify "Wired connection 2" 802-3-ethernet.wake-on-lan magic
+sudo ethtool -s enp7s0 wol g   # arm now; NM keeps it after this
+```
+
+Set it on *every* wired profile bound to the NIC (`nmcli -g NAME connection
+show`), not just the active one — a profile with `default` leaves the driver
+default (`d`). A cloned or reimaged root disk loses the previous arming; that
+is what broke waking in 2026-11. The hourly auto-suspend on idle is intended,
+which is exactly why waking must work.
 
 ## Legacy venv (development only)
 
