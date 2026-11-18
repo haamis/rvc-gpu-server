@@ -42,7 +42,7 @@ RUN pip install --force-reinstall --no-deps onnxruntime-gpu==1.22.0
 RUN mkdir -p /home/haama/.cache && chown -R 1000:1000 /home/haama
 
 WORKDIR /app
-COPY server.py worker.py worker_owner.py kokoro_engine.py chatterbox_engine.py whisperx_engine.py ./
+COPY server.py worker.py worker_owner.py cuda_limits.py kokoro_engine.py chatterbox_engine.py whisperx_engine.py ./
 COPY ttsbot/ ./ttsbot/
 
 ENV HOME=/home/haama \
