@@ -80,6 +80,9 @@ async def test_diarize_roundtrip(tmp_path, monkeypatch):
 
 
 async def test_diarize_rejects_bad_engine(tmp_path, monkeypatch):
+    # This suite can run inside the production container, which has a real
+    # HF_TOKEN; force the no-token branch so the 501 is deterministic.
+    monkeypatch.setattr(server, "HF_TOKEN", "")
     client = _client(tmp_path, monkeypatch)
     r = await _post(client, extra_data={"engine": "pyannote"})
     assert r.status_code == 501

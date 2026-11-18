@@ -109,6 +109,15 @@ code: `docker compose -f compose.yaml -f compose.gpu.yaml up -d --build`
 the container without the GPU). `ttsbot-diarize`, `rvc_infer`, models,
 and caches are mounts, so updating them does not require a rebuild.
 
+On ifrit the checkout is its own (older) line, and its `compose.yaml` carries
+ifrit-specific mount paths (`~/rvc-gpu-server/rvc_infer`, `~/ttsbot-diarize`
+at `$HOME`) — do not fast-forward that checkout onto main without reconciling
+the volumes, or the container loses its RVC/diarize code. The host model
+caches (`~/.cache/huggingface`, `~/.cache/torch`) must be writable by the
+container's uid 1000; root-owned cache dirs fail every engine with 503
+"Permission denied" (`sudo chown -R 1000:1000 ~/.cache/huggingface
+~/.cache/torch`).
+
 After a suspend/resume the worker's CUDA context is dead on the open
 `nvidia-driver-595` modules (kernel 7.x): `/convert` fails with "CUDA-capable
 device(s) is/are busy or unavailable" until the process restarts. Install
