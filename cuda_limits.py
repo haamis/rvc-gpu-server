@@ -57,6 +57,11 @@ def apply_cuda_memory_fraction(role: str = "server") -> None:
     """
     fraction = cuda_memory_fraction(role)
     if fraction is None:
+        log.info(
+            "Torch CUDA (%s): uncapped, using the whole device "
+            "(RVC_CUDA_MEMORY_FRACTION unset)",
+            role,
+        )
         return
     import torch
 

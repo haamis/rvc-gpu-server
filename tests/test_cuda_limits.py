@@ -1,6 +1,8 @@
 """The torch VRAM cap is a container budget split across its two torch processes."""
+import logging
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -93,12 +95,20 @@ def test_each_process_applies_its_own_share(monkeypatch, role, expected):
     assert cuda.calls == [pytest.approx(expected)]
 
 
-def test_unset_budget_touches_nothing(monkeypatch):
+def test_unset_budget_touches_nothing(monkeypatch, caplog):
     cuda = fake_torch(monkeypatch)
     monkeypatch.delenv("RVC_CUDA_MEMORY_FRACTION", raising=False)
-    apply_cuda_memory_fraction("server")
-    apply_cuda_memory_fraction("worker")
+    with caplog.at_level(logging.INFO, logger="rvc_server.cuda"):
+        apply_cuda_memory_fraction("server")
+        apply_cuda_memory_fraction("worker")
     assert cuda.calls == []
+    assert caplog.text.count("uncapped") == 2
+
+
+def test_ifrit_compose_keeps_the_card_uncapped():
+    """ifrit's 6GB 2060 is its own limit; only the Windows 4080 emulates it."""
+    compose = (Path(__file__).resolve().parents[1] / "compose.yaml").read_text()
+    assert "RVC_CUDA_MEMORY_FRACTION" not in compose
 
 
 def test_cpu_host_only_warns(monkeypatch):
