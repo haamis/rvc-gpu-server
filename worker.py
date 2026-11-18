@@ -76,7 +76,7 @@ def main() -> None:
 
     from cuda_limits import apply_cuda_memory_fraction
 
-    apply_cuda_memory_fraction()
+    apply_cuda_memory_fraction("worker")
 
     threads = int(os.environ.get("RVC_WORKER_THREADS") or min(8, os.cpu_count() or 4))
     torch.set_num_threads(max(1, threads))

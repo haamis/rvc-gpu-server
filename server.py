@@ -55,8 +55,8 @@ from cuda_limits import apply_cuda_memory_fraction
 
 log = logging.getLogger("rvc_server")
 
-# Before any engine can allocate: the container-wide torch VRAM cap.
-apply_cuda_memory_fraction()
+# Before any engine can allocate: this process's share of the torch VRAM cap.
+apply_cuda_memory_fraction("server")
 
 REPO_ROOT = Path(__file__).resolve().parent
 

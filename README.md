@@ -96,10 +96,11 @@ The GPU override adds `gpus: all` and
 kokoro-onnx tries TensorRT first and falls back to CPU). Chunking defaults
 to 20s for the 6GB RTX 2060; raise `RVC_SERVER_CHUNK_SEC` on 8GB+ cards.
 
-`RVC_CUDA_MEMORY_FRACTION` (e.g. `0.375`) caps torch's CUDA allocator per
-process at that fraction of the card's memory — the server and the RVC worker
-both apply it. The Windows 4080 worker sets 0.375 so it behaves like ifrit's
-6GB 2060; leave it unset on a card you want to use whole.
+`RVC_CUDA_MEMORY_FRACTION` (e.g. `0.375`) is the budget for the whole
+container's torch CUDA allocator — 6GB of the 16GB card, matching ifrit's 6GB
+2060. Torch caps are per process, so the server and the RVC worker split that
+budget (`RVC_CUDA_SERVER_SHARE`, default `1/3` to the server); their caps add
+up to the configured fraction. Leave it unset on a card you want to use whole.
 
 Logs: `docker compose logs -f rvc-server`. Rebuild after changing server
 code: `docker compose -f compose.yaml -f compose.gpu.yaml up -d --build`
