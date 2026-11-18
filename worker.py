@@ -74,6 +74,8 @@ def main() -> None:
 
     import torch
 
+    logging.basicConfig(level=logging.INFO)
+
     from cuda_limits import apply_cuda_memory_fraction
 
     apply_cuda_memory_fraction("worker")

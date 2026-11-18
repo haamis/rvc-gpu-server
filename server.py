@@ -55,9 +55,6 @@ from cuda_limits import apply_cuda_memory_fraction
 
 log = logging.getLogger("rvc_server")
 
-# Before any engine can allocate: this process's share of the torch VRAM cap.
-apply_cuda_memory_fraction("server")
-
 REPO_ROOT = Path(__file__).resolve().parent
 
 # Must stay in lockstep with the thin client's RvcRunner. Bumped only on
@@ -721,6 +718,9 @@ def main() -> None:
     import uvicorn
 
     logging.basicConfig(level=logging.INFO)
+    # Torch only caps per process; do it before any engine can allocate, and
+    # after basicConfig so the cap is visible in the log.
+    apply_cuda_memory_fraction("server")
     app = create_app(
         rvc_root=os.environ.get("RVC_WORKER_ROOT") or str(REPO_ROOT / "rvc_infer"),
         require_token=os.environ.get("RVC_GPU_SERVER_TOKEN", ""),
