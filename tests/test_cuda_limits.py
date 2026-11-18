@@ -44,16 +44,16 @@ def test_default_split_fills_the_whole_budget(monkeypatch):
     monkeypatch.delenv("RVC_CUDA_SERVER_SHARE", raising=False)
     server = cuda_memory_fraction("server")
     worker = cuda_memory_fraction("worker")
-    assert server == pytest.approx(0.125)
-    assert worker == pytest.approx(0.25)
+    assert server == pytest.approx(0.1875)
+    assert worker == pytest.approx(0.1875)
     assert server + worker == pytest.approx(0.375)
 
 
 def test_explicit_server_share(monkeypatch):
     monkeypatch.setenv("RVC_CUDA_MEMORY_FRACTION", "0.375")
-    monkeypatch.setenv("RVC_CUDA_SERVER_SHARE", "0.5")
-    assert cuda_memory_fraction("server") == pytest.approx(0.1875)
-    assert cuda_memory_fraction("worker") == pytest.approx(0.1875)
+    monkeypatch.setenv("RVC_CUDA_SERVER_SHARE", "0.25")
+    assert cuda_memory_fraction("server") == pytest.approx(0.09375)
+    assert cuda_memory_fraction("worker") == pytest.approx(0.28125)
 
 
 @pytest.mark.parametrize("raw, expected", [("0.375", 0.375), ("1", 1.0)])
@@ -84,14 +84,13 @@ def test_role_must_be_known(monkeypatch):
         cuda_memory_fraction("gpu")
 
 
-@pytest.mark.parametrize("role", ["server", "worker"])
-def test_each_process_applies_its_own_share(monkeypatch, role):
+@pytest.mark.parametrize("role, expected", [("server", 0.09375), ("worker", 0.28125)])
+def test_each_process_applies_its_own_share(monkeypatch, role, expected):
     cuda = fake_torch(monkeypatch)
     monkeypatch.setenv("RVC_CUDA_MEMORY_FRACTION", "0.375")
-    monkeypatch.delenv("RVC_CUDA_SERVER_SHARE", raising=False)
+    monkeypatch.setenv("RVC_CUDA_SERVER_SHARE", "0.25")
     apply_cuda_memory_fraction(role)
-    assert cuda.calls == [cuda_memory_fraction(role)]
-    assert cuda.calls == [pytest.approx(0.125 if role == "server" else 0.25)]
+    assert cuda.calls == [pytest.approx(expected)]
 
 
 def test_unset_budget_touches_nothing(monkeypatch):

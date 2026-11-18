@@ -99,7 +99,7 @@ to 20s for the 6GB RTX 2060; raise `RVC_SERVER_CHUNK_SEC` on 8GB+ cards.
 `RVC_CUDA_MEMORY_FRACTION` (e.g. `0.375`) is the budget for the whole
 container's torch CUDA allocator — 6GB of the 16GB card, matching ifrit's 6GB
 2060. Torch caps are per process, so the server and the RVC worker split that
-budget (`RVC_CUDA_SERVER_SHARE`, default `1/3` to the server); their caps add
+budget (`RVC_CUDA_SERVER_SHARE`, default `1/2` to the server); their caps add
 up to the configured fraction. Leave it unset on a card you want to use whole.
 
 Logs: `docker compose logs -f rvc-server`. Rebuild after changing server

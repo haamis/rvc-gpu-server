@@ -6,7 +6,7 @@ memory margins hold on both machines. Unset = no cap.
 
 Torch can only cap itself per process, and this container runs two CUDA torch
 processes (the server with its engines, the RVC worker), so the budget is
-split: RVC_CUDA_SERVER_SHARE (default 1/3) of it for the server, the rest for
+split: RVC_CUDA_SERVER_SHARE (default 1/2) of it for the server, the rest for
 the worker. The two caps always add up to RVC_CUDA_MEMORY_FRACTION.
 """
 import logging
@@ -16,7 +16,7 @@ log = logging.getLogger("rvc_server.cuda")
 
 TOTAL_ENV = "RVC_CUDA_MEMORY_FRACTION"
 SERVER_SHARE_ENV = "RVC_CUDA_SERVER_SHARE"
-DEFAULT_SERVER_SHARE = 1 / 3
+DEFAULT_SERVER_SHARE = 0.5
 ROLES = ("server", "worker")
 
 
